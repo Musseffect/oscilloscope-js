@@ -1,3 +1,3 @@
 Everybody loves old stuff, r-right?
 
-![Screenshot 1](/docs/screenshot.jpg)
+![Screenshot 1](/docs/screenshot1.jpg)
