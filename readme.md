@@ -6,7 +6,7 @@ Everybody loves old stuff, r-right?
 [Demo](https://musseffect.github.io/oscilloscope-js)
 
 <img src="/docs/screenshot1.jpg" alt="Screenshot 1" width="500"/>
-<img src="/docs/screenshot1.jpg" alt="Screenshot 2" width="500"/>
+<img src="/docs/screenshot2.jpg" alt="Screenshot 2" width="500"/>
 
 # Oscilloscope integrator
 
