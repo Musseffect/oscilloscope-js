@@ -1,5 +1,5 @@
-
-var TestLineRenderer = (function(){
+const TestPointRenderer = (function(){
+    
     const saveImage = (function(){
         const a = document.createElement("a");
         document.body.appendChild(a);
@@ -11,7 +11,7 @@ var TestLineRenderer = (function(){
             a.click();
         }
     })();
-    const vertexShaderSourcePostProcessing = `#version 300 es
+    const vertexShaderSourceFade = `#version 300 es
     layout (location=0)in vec2 position;
     out vec2 fPosition;
 
@@ -19,7 +19,6 @@ var TestLineRenderer = (function(){
         fPosition = position*0.5+0.5;
         gl_Position = vec4(position,0.,1.);
     }`;
-
     const fragmentShaderSourceFade = `#version 300 es
     precision highp float;
     
@@ -30,10 +29,9 @@ var TestLineRenderer = (function(){
 
     
 	void main(){
-        color.xyz = exp(-fade)*texture(backbuffer,fPosition).xyz;
+        color.xyz = fade*texture(backbuffer,fPosition).xyz;
         color.w = 1.0;
-	}
-    `;
+	}`;
     const vertexShaderSourceRenderBuffer = `#version 300 es
     layout (location=0)in vec2 position;
     out vec2 fPosition;
@@ -43,7 +41,6 @@ var TestLineRenderer = (function(){
         fPosition = position*0.5+0.5;
         gl_Position = vec4(position*scale,0.,1.);
     }`;
-
     const fragmentShaderSourceRenderBuffer = `#version 300 es
     precision highp float;
     
@@ -57,30 +54,18 @@ var TestLineRenderer = (function(){
     
 	void main(){
         vec3 value = texture(backbuffer,fPosition).xyz;
-        color.xyz = 1. - exp(-gain*(value)-bias);
-        color.xyz = pow(color.xyz,vec3(gamma));
+        color.xyz = 1. - exp(-gain*(value));
+        color.xyz = pow(color.xyz,vec3(gamma)) + bias;
         color.w = 1.0;
-	}
-    `;
+	}`;
+    Exp.defineFunction("noise",noise);
+    Exp.defineFunction("rand",(t)=>{return Math.random();});
     const resolution = 1024;
 
-    function getNextPoint(p,t){
-        return [
-            //0.5+0.5*Math.cos(t/sweeptime*2*Math.PI*13.71),
-            (t)%1,
-            Math.sin(t*2*Math.PI*100.0)
-        ];
-    }
-    
-    Exp.defineFunction("noise",noise);
-    Exp.defineFunction("rand",Math.random);
 
-    var timer = 0;
-    var frameCounter = 0;
-    const frametime = 1/60;
     var frameId = 0;
-    var p = [0.0,0.0];
-    var c = 1.0;
+    let pointCounter = 0;
+    var frameCounter = 0;
     var canvas = document.getElementById("canvas"); 
     var gl = canvas.getContext("webgl2",{ preserveDrawingBuffer: true });
     if (!gl) {
@@ -101,10 +86,10 @@ var TestLineRenderer = (function(){
         }
         extensions[extensionsList[i]] = extension;
     }
-    LineRenderer.init(gl);
-    LineRenderer.viewport(-1,-1,2,2);
+    PointRenderer.init(gl);
+    PointRenderer.viewport(-1,-1,2,2);
     gl.viewport(0,0,gl.canvas.width,gl.canvas.height);
-    gl.clearColor(0, 0, 0, 1);
+    gl.clearColor(0,0,0,1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     var currentTexture = 0;
@@ -130,7 +115,6 @@ var TestLineRenderer = (function(){
         new FBO(gl, backbufferTexture[0], gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, 0),
         new FBO(gl, backbufferTexture[1], gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, 0)
     ];
-
 	var quad = {buffer:null,vao:null};
     quad.buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad.buffer);
@@ -150,17 +134,70 @@ var TestLineRenderer = (function(){
     gl.vertexAttribPointer(
         0, size, type, normalize, stride, offset);
     gl.bindVertexArray(null);
-    
+
     var programs={fade:null,renderBuffer:null};
-    var vertexShaderPostProcessing = new Shader(gl, gl.VERTEX_SHADER, vertexShaderSourcePostProcessing);
+    var vertexShaderFade = new Shader(gl, gl.VERTEX_SHADER, vertexShaderSourceFade);
     var vertexShaderRenderBuffer = new Shader(gl,gl.VERTEX_SHADER, vertexShaderSourceRenderBuffer);
     var fragmentShaderFade = new Shader(gl, gl.FRAGMENT_SHADER, fragmentShaderSourceFade);
     var fragmentShaderRenderBuffer = new Shader(gl, gl.FRAGMENT_SHADER, fragmentShaderSourceRenderBuffer);
     
-    programs.fade = new ShaderProgram(gl, vertexShaderPostProcessing, fragmentShaderFade);
+    programs.fade = new ShaderProgram(gl, vertexShaderFade, fragmentShaderFade);
     programs.renderBuffer = new ShaderProgram(gl, vertexShaderRenderBuffer, fragmentShaderRenderBuffer);
 
+
     const gui = new dat.GUI();
+    var ui = {
+        xNew:"sin(4*y+3*cos(z+x))",
+        yNew:"frac(i/1000)+rand(i)*0.02",
+        zNew:"cos(z*3.9*(1-z)+y)",
+        x0:"0.5",
+        y0:"0.5",
+        z0:"0.5",
+        intensity:"1",
+        xProj:"x*0.8",
+        yProj:"z*0.8",
+        pointsPerFrame:300,
+        maxPoints:"10e8",
+        bias:0.05,
+        gain:1.5,
+        fade:0.01,
+        gamma:2.2,
+        sigma:4,
+        color:"#FFFFFF",
+        pause:false,
+        ["snap to border"]:true,
+        restart:function(){
+            pointCounter = 0;
+            p = [parseFloat(ui.x0),parseFloat(ui.y0),parseFloat(ui.z0)];
+            backbuffers[currentTexture].use(gl);
+            gl.clearColor(0, 0, 0, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        },
+        save:saveTexture
+    };
+    gui.remember(ui);
+    gui.add(ui,'xNew');
+    gui.add(ui,'yNew');
+    gui.add(ui,'zNew');
+    gui.add(ui,'x0');
+    gui.add(ui,'y0');
+    gui.add(ui,'z0');
+    gui.add(ui,'xProj');
+    gui.add(ui,'yProj');
+    gui.add(ui,'intensity');
+    gui.add(ui,'pointsPerFrame',1,3000,1);
+    gui.add(ui,"maxPoints");
+    gui.add(ui,'bias',0,1,0.01);
+    gui.add(ui,'gain',-10,10,0.001);
+    gui.add(ui,'fade',0,1.,0.001);
+    gui.add(ui,'gamma',0,4,0.1);
+    gui.add(ui,'sigma',0,20,0.1);
+    gui.add(ui,'snap to border');
+    gui.addColor(ui,'color');
+    gui.add(ui,'pause');
+    gui.add(ui,'restart');
+    gui.add(ui,'save');
+ 
     function saveTexture(){
         let renderTexture = new Texture2D(gl,0,gl.RGBA,resolution,resolution,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
         let renderBuffer = new FBO(gl, renderTexture, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, 0);
@@ -170,7 +207,7 @@ var TestLineRenderer = (function(){
         backbufferTexture[currentTexture].bind(gl,0);
         programs.renderBuffer.use(gl);
         programs.renderBuffer.setUniform("backbuffer",0);
-        programs.renderBuffer.setUniform("gain",ui.gain*0.001);
+        programs.renderBuffer.setUniform("gain",Math.pow(2,ui.gain));
         programs.renderBuffer.setUniform("bias",ui.bias);
         programs.renderBuffer.setUniform("gamma",ui.gamma);
         programs.renderBuffer.setUniform("scale",[1,1]);
@@ -212,96 +249,45 @@ var TestLineRenderer = (function(){
             saveImage(blob, `image_${str}.png`);
         });
     }
-    var ui = {
-        bias:0,
-        gain:1,
-        fade:2,
-        gamma:2.2,
-        sigma:10,
-        color:"#FFFFFF",
-        pause:false,
-        ["snap to border"]:true,
-        restart:function(){
-            timer = 0.0;
-            p = [0.,0.];
-            c = 1.0;
-            backbuffers[currentTexture].use(gl);
-            gl.clear(gl.COLOR_BUFFER_BIT);
-
-        },
-        save:saveTexture,
-        expX:"lerp(-1,1,frac(t))",
-        expY:"sin(t*2*pi())",
-        expZ:"1",
-        linesPerFrame:500
-    }
-    gui.remember(ui);
-    gui.add(ui,'expX');
-    gui.add(ui,'expY');
-    gui.add(ui,'expZ');
-    gui.add(ui,'bias',0,2,0.01);
-    gui.add(ui,'gain',0,10,0.001);
-    gui.add(ui,'fade',0,20,0.1);
-    gui.add(ui,'gamma',0,4,0.1);
-    gui.add(ui,'snap to border');
-    gui.addColor(ui,'color');
-    gui.add(ui,'sigma',0,20,0.1);
-    gui.add(ui,'linesPerFrame',2,3000,1);
-    gui.add(ui,'pause');
-    gui.add(ui,'restart');
-    gui.add(ui,'save');
-
-    function resize(canvas) {
-        // Lookup the size the browser is displaying the canvas.
-        var displayWidth  = canvas.clientWidth;
-        var displayHeight = canvas.clientHeight;
-       
-        // Check if the canvas is not the same size.
-        if (canvas.width  != displayWidth ||
-            canvas.height != displayHeight) {
-       
-          // Make the canvas the same size
-          canvas.width  = displayWidth;
-          canvas.height = displayHeight;
-        }
-    }      
-    function renderLines(){
-        const points = ui.linesPerFrame;
-        let expX = expY = expZ = {$eval:()=>{return 0;}};
-        try{
-            expX = Exp.compile(ui.expX,["t"]);
-            expY = Exp.compile(ui.expY,["t"]);
-            expZ = Exp.compile(ui.expZ,["t"]);
-        }catch(e){
-        }
+    function renderPoints(){
+        const maxPoints = parseFloat(ui.maxPoints);
+        let xNew = yNew = zNew = {$eval:function(p){return 0;}};
+        let xProj = yProj = intensity={$eval:function(p){return 0;}};
         let color = colorValues(ui.color);
-        for(let i=0;i<points;i++){
-            timer+=frametime/points;
-            //let pNext = getNextPoint(p,timer);
-            let pNext = [expX.$eval([timer]),expY.$eval([timer])];
-            if(ui["snap to border"]){
-                pNext = [clamp(pNext[0],-1,1),clamp(pNext[1],-1,1)];
-            }
-            let cNext = expZ.$eval([timer]);
-            let factor = clamp(expZ.$eval([timer])/points,0,1);
-            LineRenderer.addLine(p,pNext,[color[0]*factor,color[1]*factor,color[2]*factor],ui.sigma/resolution,c,cNext);
-            p = pNext.slice();
-            c = cNext;
+        color = [color[0],color[1],color[2]];
+        color = [color[0]/255,color[1]/255,color[2]/255];
+        try{
+            xNew = Exp.compile(ui.xNew,["x","y","z","i"]);
+            yNew = Exp.compile(ui.yNew,["x","y","z","i"]);
+            zNew = Exp.compile(ui.zNew,["x","y","z","i"]);
+            xProj = Exp.compile(ui.xProj,["x","y","z","i"]);
+            yProj = Exp.compile(ui.yProj,["x","y","z","i"]);
+            intensity = Exp.compile(ui.intensity,["x","y","z","i"]);
+        }catch(e){
+            return;
         }
+        let counter = 0;
+        while(pointCounter<maxPoints&&counter<ui.pointsPerFrame){
+            args = p.concat(pointCounter);
+            p = [xNew.$eval(args),yNew.$eval(args),zNew.$eval(args)];
+            args = p.concat(pointCounter);
+            let projected = [xProj.$eval(args),yProj.$eval(args)];
+            if(ui["snap to border"]){
+                projected[0] = clamp(projected[0],-1,1);
+                projected[1] = clamp(projected[1],-1,1);
+            }
+            const factor = Math.max(intensity.$eval(args),0)/1000;
+            PointRenderer.addPoint(projected,[color[0]*factor,color[1]*factor,color[2]*factor],ui.sigma/resolution);
+            counter++;
+            pointCounter++;
+        }  
         gl.disable(gl.DEPTH_TEST);
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.ONE,gl.ONE);
-        //gl.viewport(0,0,gl.canvas.width,gl.canvas.height);
-        /*LineRenderer.addLine([0.1,0.8],[0.9,0.8],[1.95,1.95,1.95],0.003);
-        LineRenderer.addLine([0.9,0.8],[0.9,-0.8],[1.95,1.95,1.95],0.003);*/
-
-        //render lines to backbuffer
-        /*gl.clearColor(0, 0, 0, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT);*/
+        gl.blendFunc(gl.ONE,gl.ONE); 
         backbuffers[currentTexture].use(gl);
         gl.viewport(0,0,resolution,resolution);
-        LineRenderer.renderFrame();
-        LineRenderer.clear();
+        PointRenderer.renderFrame();
+        PointRenderer.clear();
     }
     function renderBuffer(){
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -309,7 +295,7 @@ var TestLineRenderer = (function(){
         backbufferTexture[currentTexture].bind(gl,0);
         programs.renderBuffer.use(gl);
         programs.renderBuffer.setUniform("backbuffer",0);
-        programs.renderBuffer.setUniform("gain",ui.gain*0.001);
+        programs.renderBuffer.setUniform("gain",Math.pow(2,ui.gain));
         programs.renderBuffer.setUniform("bias",ui.bias);
         programs.renderBuffer.setUniform("gamma",ui.gamma);
         let backbufferRatio = 1;
@@ -328,48 +314,47 @@ var TestLineRenderer = (function(){
         gl.viewport(0,0,gl.canvas.width,gl.canvas.height);
         gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
     }
-    function applyFading(){
+    function applyFade(){
         backbuffers[1-currentTexture].use(gl);
         programs.fade.use(gl);
         backbufferTexture[currentTexture].bind(gl,0);
         programs.fade.setUniform("backbuffer",0);
-        programs.fade.setUniform("fade",ui.fade*frametime);
+        programs.fade.setUniform("fade",Math.exp(-ui.fade));
         programs.fade.bindUniforms(gl);
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.viewport(0,0,resolution,resolution);
         gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
     }
+
+    let p = [0,0,0];
     function frame(){
         resize(gl.canvas);
-        
         if(!ui.pause){
-            renderLines();
+            renderPoints();
         }
         //render backbuffer to a screen
         renderBuffer();
         //apply fade
         if(!ui.pause){
-            applyFading();
-            //switch buffers
-            currentTexture=1-currentTexture;
+            applyFade();
+            currentTexture = 1-currentTexture;
             frameCounter++;
         }
-        frameId = window.requestAnimationFrame(frame);
-    }
 
+        frameId = window.requestAnimationFrame(frame);
+    } 
 
     return {
         run:function(){
-            //p = getNextPoint(p,timer);
-            window.requestAnimationFrame(frame);
+            p = [parseFloat(ui.x0),parseFloat(ui.y0),parseFloat(ui.z0)];
+            frameId = window.requestAnimationFrame(frame);
+        },
+        stop:function(){
+            window.cancelAnimationFrame(frameId);
         }
+
     };
 })();
 
-TestLineRenderer.run();
-
-
-
-
-
+TestPointRenderer.run();

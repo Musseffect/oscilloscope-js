@@ -5,12 +5,10 @@ function mix(a,b,x){
     return a*(1-x)+b*x;
 }
 function mulberry32(a) {
-    return function() {
-      var t = a += 0x6D2B79F5;
-      t = Math.imul(t ^ t >>> 15, t | 1);
-      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-      return ((t ^ t >>> 14) >>> 0) / 4294967296;
-    }
+    var t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
 }
 function smoothstep(x,min,max){
     let t = clamp((x-min)/(max-min),0,1);
@@ -18,8 +16,8 @@ function smoothstep(x,min,max){
 }
 function noise(x){
     let ix = Math.floor(x);
-    let fx = x%1;
-    return smoothstep(mix(mulberry32(ix),mulberry32(ix+1),fx),0,1);
+    let fx = x-Math.floor(x);
+    return mix(mulberry32(ix),mulberry32(ix+1),smoothstep(fx,0,1));
 }
 
 // return array of [r,g,b,a] from any valid color. if failed returns undefined
@@ -65,3 +63,20 @@ function colorValues(color)
         });
     }
 }
+
+
+function resize(canvas) {
+    // Lookup the size the browser is displaying the canvas.
+    var displayWidth  = canvas.clientWidth;
+    var displayHeight = canvas.clientHeight;
+   
+    // Check if the canvas is not the same size.
+    if (canvas.width  != displayWidth ||
+        canvas.height != displayHeight) {
+   
+      // Make the canvas the same size
+      canvas.width  = displayWidth;
+      canvas.height = displayHeight;
+    }
+}  
+

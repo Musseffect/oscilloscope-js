@@ -1,5 +1,4 @@
-
-var LineRenderer = (function(){
+const LineRenderer = (function(){
 	const vertexShaderSource = `#version 300 es
 
     #define ROT(a) mat2(cos(a),-sin(a),sin(a),cos(a))

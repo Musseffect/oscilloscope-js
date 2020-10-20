@@ -1,4 +1,4 @@
-var PointRenderer = (function(){
+const PointRenderer = (function(){
 	const vertexShaderSource = `#version 300 es
 
 

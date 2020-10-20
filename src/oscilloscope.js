@@ -1,5 +1,16 @@
-var TestPointRenderer = (function(){
-    const vertexShaderSourceFade = `#version 300 es
+const Oscilloscope = (function(){
+    const saveImage = (function(){
+        const a = document.createElement("a");
+        document.body.appendChild(a);
+        a.style.display="none";
+        return function(blob,filename){
+            const url = URL.createObjectURL(blob);
+            a.href = url;
+            a.download = filename;
+            a.click();
+        }
+    })();
+    const vertexShaderSourcePostProcessing = `#version 300 es
     layout (location=0)in vec2 position;
     out vec2 fPosition;
 
@@ -7,6 +18,7 @@ var TestPointRenderer = (function(){
         fPosition = position*0.5+0.5;
         gl_Position = vec4(position,0.,1.);
     }`;
+
     const fragmentShaderSourceFade = `#version 300 es
     precision highp float;
     
@@ -17,9 +29,10 @@ var TestPointRenderer = (function(){
 
     
 	void main(){
-        color.xyz = fade*texture(backbuffer,fPosition).xyz;
+        color.xyz = exp(-fade)*texture(backbuffer,fPosition).xyz;
         color.w = 1.0;
-	}`;
+	}
+    `;
     const vertexShaderSourceRenderBuffer = `#version 300 es
     layout (location=0)in vec2 position;
     out vec2 fPosition;
@@ -29,6 +42,7 @@ var TestPointRenderer = (function(){
         fPosition = position*0.5+0.5;
         gl_Position = vec4(position*scale,0.,1.);
     }`;
+
     const fragmentShaderSourceRenderBuffer = `#version 300 es
     precision highp float;
     
@@ -42,16 +56,28 @@ var TestPointRenderer = (function(){
     
 	void main(){
         vec3 value = texture(backbuffer,fPosition).xyz;
-        color.xyz = 1. - exp(-gain*(value)-bias);
-        color.xyz = pow(color.xyz,vec3(gamma));
+        color.xyz = 1. - exp(-gain*(value));
+        color.xyz = pow(color.xyz,vec3(gamma)) + bias;
         color.w = 1.0;
-	}`;
-
+	}
+    `;
+    /*function getNextPoint(p,t){
+        return [
+            //0.5+0.5*Math.cos(t/sweeptime*2*Math.PI*13.71),
+            (t)%1,
+            Math.sin(t*2*Math.PI*100.0)
+        ];
+    }*/
+    Exp.defineFunction("noise",noise);
+    Exp.defineFunction("rand",Math.random);
     const resolution = 1024;
-
-    let pointCounter = 0;
+    var timer = 0;
     var frameCounter = 0;
-    var canvas = document.getElementById("canvas"); 
+    const frametime = 1/60;
+    var frameId = 0;
+    var p = [0.0,0.0];
+    var c = 1.0;
+    var canvas = document.getElementById("canvas");
     var gl = canvas.getContext("webgl2",{ preserveDrawingBuffer: true });
     if (!gl) {
         alert("HAHA, U CANT USE WEBGL 2, POOR GUY, HAHAHAH, plz sry");
@@ -71,10 +97,10 @@ var TestPointRenderer = (function(){
         }
         extensions[extensionsList[i]] = extension;
     }
-    PointRenderer.init(gl);
-    PointRenderer.viewport(-1,-1,2,2);
+    LineRenderer.init(gl);
+    LineRenderer.viewport(-1,-1,2,2);
     gl.viewport(0,0,gl.canvas.width,gl.canvas.height);
-    gl.clearColor(0,0,0,1);
+    gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     var currentTexture = 0;
@@ -100,6 +126,7 @@ var TestPointRenderer = (function(){
         new FBO(gl, backbufferTexture[0], gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, 0),
         new FBO(gl, backbufferTexture[1], gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, 0)
     ];
+
 	var quad = {buffer:null,vao:null};
     quad.buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad.buffer);
@@ -119,103 +146,138 @@ var TestPointRenderer = (function(){
     gl.vertexAttribPointer(
         0, size, type, normalize, stride, offset);
     gl.bindVertexArray(null);
-
+    
     var programs={fade:null,renderBuffer:null};
-    var vertexShaderFade = new Shader(gl, gl.VERTEX_SHADER, vertexShaderSourceFade);
+    var vertexShaderPostProcessing = new Shader(gl, gl.VERTEX_SHADER, vertexShaderSourcePostProcessing);
     var vertexShaderRenderBuffer = new Shader(gl,gl.VERTEX_SHADER, vertexShaderSourceRenderBuffer);
     var fragmentShaderFade = new Shader(gl, gl.FRAGMENT_SHADER, fragmentShaderSourceFade);
     var fragmentShaderRenderBuffer = new Shader(gl, gl.FRAGMENT_SHADER, fragmentShaderSourceRenderBuffer);
     
-    programs.fade = new ShaderProgram(gl, vertexShaderFade, fragmentShaderFade);
+    programs.fade = new ShaderProgram(gl, vertexShaderPostProcessing, fragmentShaderFade);
     programs.renderBuffer = new ShaderProgram(gl, vertexShaderRenderBuffer, fragmentShaderRenderBuffer);
 
-
-    const gui = new dat.GUI();
     var ui = {
-        xNew:"cos(y)+sin(x+cos(z))",
-        yNew:"0",
-        zNew:"z*2.26*(1-z)",
-        x0:"0",
-        y0:"0.5",
-        z0:"0.5",
-        xProj:"x",
-        yProj:"y",
-        pointsPerFrame:300,
-        maxPoints:"10e8",
         bias:0,
         gain:1,
-        fade:1,
+        fade:2,
         gamma:2.2,
         sigma:10,
         color:"#FFFFFF",
         pause:false,
-        restart:false,
-        save:false
-    };
+        ["snap to border"]:true,
+        restart:function(){
+            timer = 0.0;
+            p = [0.,0.];
+            c = 1.0;
+            backbuffers[currentTexture].use(gl);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        },
+        save:saveTexture,
+        x:"lerp(-1,1,frac(t))",
+        y:"sin(t*2*pi())",
+        z:"1",
+        linesPerFrame:500
+    }
+    const gui = new dat.GUI();
     gui.remember(ui);
-    gui.add(ui,'xNew');
-    gui.add(ui,'yNew');
-    gui.add(ui,'zNew');
-    gui.add(ui,'x0');
-    gui.add(ui,'y0');
-    gui.add(ui,'z0');
-    gui.add(ui,'xProj');
-    gui.add(ui,'yProj');
-    gui.add(ui,'pointsPerFrame',1,3000,1);
-    gui.add(ui,"maxPoints");
-    gui.add(ui,'bias',0,2,0.01);
-    gui.add(ui,'gain',0,10,0.001);
-    gui.add(ui,'fade',0,1,0.01);
+    gui.add(ui,'x');
+    gui.add(ui,'y');
+    gui.add(ui,'z');
+    gui.add(ui,'bias',0,1,0.01);
+    gui.add(ui,'gain',-5,5,0.001);
+    gui.add(ui,'fade',0,20,0.1);
     gui.add(ui,'gamma',0,4,0.1);
-    gui.add(ui,'sigma',0,20,0.1);
+    gui.add(ui,'snap to border');
     gui.addColor(ui,'color');
+    gui.add(ui,'sigma',0,20,0.1);
+    gui.add(ui,'linesPerFrame',1,3000,1);
     gui.add(ui,'pause');
     gui.add(ui,'restart');
     gui.add(ui,'save');
+    
+    function saveTexture(){
+        let renderTexture = new Texture2D(gl,0,gl.RGBA,resolution,resolution,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+        let renderBuffer = new FBO(gl, renderTexture, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, 0);
+        
+        renderBuffer.use(gl);
+        gl.bindVertexArray(quad.vao);
+        backbufferTexture[currentTexture].bind(gl,0);
+        programs.renderBuffer.use(gl);
+        programs.renderBuffer.setUniform("backbuffer",0);
+        programs.renderBuffer.setUniform("gain",Math.pow(2,ui.gain));
+        programs.renderBuffer.setUniform("bias",ui.bias);
+        programs.renderBuffer.setUniform("gamma",ui.gamma);
+        programs.renderBuffer.setUniform("scale",[1,1]);
+        programs.renderBuffer.bindUniforms(gl);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.viewport(0,0,resolution,resolution);
+        gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
 
-    function resize(canvas) {
-        // Lookup the size the browser is displaying the canvas.
-        var displayWidth  = canvas.clientWidth;
-        var displayHeight = canvas.clientHeight;
-       
-        // Check if the canvas is not the same size.
-        if (canvas.width  != displayWidth ||
-            canvas.height != displayHeight) {
-       
-          // Make the canvas the same size
-          canvas.width  = displayWidth;
-          canvas.height = displayHeight;
+        var pixels = new Uint8Array(resolution * resolution * 4);
+        gl.readPixels(0, 0, resolution, resolution, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        renderTexture.destroy(gl);
+        renderBuffer.destroy(gl);
+        var _canvas = document.createElement("canvas");
+        _canvas.width = resolution;
+        _canvas.height = resolution;
+        var _context = _canvas.getContext("2d");
+        var imgData = _context.createImageData(resolution, resolution);
+        const size = resolution*resolution;
+        for(let i=0;i<size;i++){
+            let x = i%resolution;
+            let y = Math.floor(i/resolution);
+            const j = x+(resolution-y-1)*resolution;
+            imgData.data[i*4] = pixels[j*4];
+            imgData.data[i*4+1] = pixels[j*4+1];
+            imgData.data[i*4+2] = pixels[j*4+2];
+            imgData.data[i*4+3] = 255;
         }
-    }  
-    function renderPoints(){
-        const maxPoints = parseInt(ui.maxPoints);
-        let xNew = yNew = zNew = null;
-        let xProj = yProj = null;
-        let color = colorValues(ui.color);
-        color = [color[0],color[1],color[2]];
+        _context.putImageData(imgData, 0, 0);
+        _canvas.toBlob(function (blob){
+            var today = new Date();
+            const dd = String(today.getDate()).padStart(2, '0');
+            const mm = String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
+            const yyyy = String(today.getFullYear()).padStart(4, '0');
+            const hh = String(today.getHours()).padStart(2, '0');
+            const minmin = String(today.getMinutes()).padStart(2, '0');
+            var str = mm + '-' + dd + '-' + yyyy + '_' + hh + '-' + minmin;
+            saveImage(blob, `image_${str}.png`);
+        });
+    }
+    function renderLines(){
+        const points = ui.linesPerFrame;
+        let expX = expY = expZ = {$eval:()=>{return 0;}};
         try{
-            xNew = Exp.compile(ui.xNew,["x","y","z"]);
-            yNew = Exp.compile(ui.yNew,["x","y","z"]);
-            zNew = Exp.compile(ui.zNew,["x","y","z"]);
-            xProj = Exp.compile(ui.xProj,["x","y","z"]);
-            yProj = Exp.compile(ui.yProj,["x","y","z"]);
+            expX = Exp.compile(ui.x,["t"]);
+            expY = Exp.compile(ui.y,["t"]);
+            expZ = Exp.compile(ui.z,["t"]);
         }catch(e){
-            return;
         }
-        let counter = 0;
-        while(pointCounter<maxPoints&&counter<ui.pointsPerFrame){
-            p = [xNew.$eval(p),yNew.$eval(p),zNew.$eval(p)];
-            const projected = [clamp(xProj.$eval(p),-1,1),clamp(yProj.$eval(p),-1,1)];
-            PointRenderer.addPoint(projected,color,ui.sigma/resolution);
-            counter++;
-        }  
+        let color = colorValues(ui.color);
+        color = [color[0]/255,color[1]/255,color[2]/255];
+        for(let i=0;i<points;i++){
+            timer+=frametime/points;
+            //let pNext = getNextPoint(p,timer);
+            let pNext = [expX.$eval([timer]),expY.$eval([timer])];
+            if(ui["snap to border"]){
+                pNext = [clamp(pNext[0],-1,1),clamp(pNext[1],-1,1)];
+            }
+            let cNext = clamp(expZ.$eval([timer]),0,1);
+            let factor = cNext/points;
+            LineRenderer.addLine(p,pNext,[color[0]*factor,color[1]*factor,color[2]*factor],ui.sigma/resolution,c,cNext);
+            p = pNext;
+            c = cNext;
+        }
         gl.disable(gl.DEPTH_TEST);
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.ONE,gl.ONE); 
+        gl.blendFunc(gl.ONE,gl.ONE);
+        //render lines to backbuffer
         backbuffers[currentTexture].use(gl);
         gl.viewport(0,0,resolution,resolution);
-        PointRenderer.renderFrame();
-        PointRenderer.clear();
+        LineRenderer.renderFrame();
+        LineRenderer.clear();
     }
     function renderBuffer(){
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -223,7 +285,7 @@ var TestPointRenderer = (function(){
         backbufferTexture[currentTexture].bind(gl,0);
         programs.renderBuffer.use(gl);
         programs.renderBuffer.setUniform("backbuffer",0);
-        programs.renderBuffer.setUniform("gain",ui.gain*0.001);
+        programs.renderBuffer.setUniform("gain",Math.pow(2,ui.gain));
         programs.renderBuffer.setUniform("bias",ui.bias);
         programs.renderBuffer.setUniform("gamma",ui.gamma);
         let backbufferRatio = 1;
@@ -242,53 +304,49 @@ var TestPointRenderer = (function(){
         gl.viewport(0,0,gl.canvas.width,gl.canvas.height);
         gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
     }
-    function applyFading(){
+    function applyFade(){
         backbuffers[1-currentTexture].use(gl);
         programs.fade.use(gl);
         backbufferTexture[currentTexture].bind(gl,0);
         programs.fade.setUniform("backbuffer",0);
-        programs.fade.setUniform("fade",ui.fade);
+        programs.fade.setUniform("fade",ui.fade*frametime);
         programs.fade.bindUniforms(gl);
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.viewport(0,0,resolution,resolution);
         gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
     }
-
-    let p = [0,0,0];
     function frame(){
         resize(gl.canvas);
-        if(ui.restart){
-            pointCounter = 0;
-            p = [parseFloat(ui.x0),parseFloat(ui.y0),parseFloat(ui.z0)];
-            ui.restart = false;
-        }
+        
         if(!ui.pause){
-            renderPoints();
+            renderLines();
         }
         //render backbuffer to a screen
         renderBuffer();
         //apply fade
         if(!ui.pause){
-            applyFading();
-            currentTexture = 1-currentTexture;
+            applyFade();
+            //switch buffers
+            currentTexture=1-currentTexture;
             frameCounter++;
         }
-
-        if(ui.save){
-            //TODO
-            ui.save = false;
-        }
         frameId = window.requestAnimationFrame(frame);
-    } 
-
+    }
     return {
         run:function(){
-            p = [parseFloat(ui.x0),parseFloat(ui.y0),parseFloat(ui.z0)];
-            window.requestAnimationFrame(frame);
+            //p = getNextPoint(p,timer);
+            frameId = window.requestAnimationFrame(frame);
+        },
+        stop:function(){
+            window.cancelAnimationFrame(frameId);
         }
-
     };
 })();
 
-TestPointRenderer.run();
+Oscilloscope.run();
+
+
+
+
+
